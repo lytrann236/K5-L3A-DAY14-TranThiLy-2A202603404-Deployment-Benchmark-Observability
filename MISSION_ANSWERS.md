@@ -195,7 +195,82 @@ Hạn chế: bộ đếm nằm trong RAM của một process, chạy nhiều ins
 - **Vì sao cần cả hai:** rate limit chặn gọi **quá nhanh** (spam, DoS); cost guard chặn **tiêu quá tiền** — một user gọi chậm nhưng câu hỏi dài vẫn có thể đốt hết ngân sách mà không chạm rate limit.
 
 
+## Part 5 — Scaling & Reliability
 
+### Exercise 5.1 · Health checks (`05-scaling-reliability/develop/app.py`)
+
+- **`/health` (liveness):** "process còn sống không?" — trả 200 kèm uptime, version, kiểm tra RAM (`psutil`). Nền tảng gọi định kỳ; lỗi hoặc timeout → restart container.
+- **`/ready` (readiness):** "đã sẵn sàng nhận request chưa?" — 200 khi đã khởi động xong, 503 khi đang khởi động hoặc đang tắt. Load balancer dựa vào đây để quyết định có chuyển request vào không.
+- **Khác nhau:** liveness sai → **restart**; readiness sai → **tạm ngừng gửi request** nhưng không restart (ví dụ đang chờ Redis).
+
+```
+$ curl http://localhost:8000/health
+{"status":"ok","uptime_seconds":23.7,"version":"1.0.0","environment":"development","timestamp":"2026-11-25T08:29:44.522482+00:00","checks":{"memory":{"status":"ok","used_percent":62.5}}}
+$ curl http://localhost:8000/ready
+{"ready":true,"in_flight_requests":1}
+```
+
+### Exercise 5.2 · Graceful shutdown
+
+Code: middleware đếm `_in_flight_requests`; khi nhận SIGTERM, `lifespan` đặt `_is_ready = False` (ngừng nhận việc mới) rồi chờ các request đang chạy xong (tối đa 30 s) mới thoát.
+
+Test: gửi một request rồi `kill -TERM` ngay sau 0,2 s:
+
+```
+$ PID=$(lsof -ti tcp:8000 -sTCP:LISTEN | head -1)
+$ curl -s -X POST "http://localhost:8000/ask?question=Long%20task" & sleep 0.2; kill -TERM $PID; wait
+{"answer":"Agent đang hoạt động tốt! (mock response) Hỏi thêm câu hỏi đi nhé."}
+```
+
+Log server:
+```
+INFO:     Shutting down
+INFO:     127.0.0.1:56081 - "POST /ask?question=Long%20task HTTP/1.1" 200 OK
+INFO:     Waiting for application shutdown.
+INFO 🔄 Graceful shutdown initiated...
+INFO ✅ Shutdown complete
+INFO Received signal 15 — uvicorn will handle graceful shutdown
+```
+
+→ Request đang chạy vẫn nhận **200** dù đã có lệnh tắt; tắt xong mới thoát process.
+
+### Exercise 5.3 · Stateless design
+
+Lưu lịch sử hội thoại trong biến Python (`conversation_history = {}`) thì mỗi instance có RAM riêng: request 1 vào instance A, request 2 vào instance B → B không thấy lịch sử A đã lưu; instance restart là mất hết. Bản production lưu state trong **Redis** theo key session, mọi instance đọc/ghi cùng một chỗ, instance nào trả lời cũng được.
+
+### Exercise 5.4 · Load balancing (3 agent + Nginx + Redis)
+
+```
+$ docker compose -p k5-day14-scaling up -d --build --scale agent=3
+$ docker compose -p k5-day14-scaling ps
+k5-day14-scaling-agent-1   Up (healthy)   8000/tcp
+k5-day14-scaling-agent-2   Up (healthy)   8000/tcp
+k5-day14-scaling-agent-3   Up (healthy)   8000/tcp
+k5-day14-scaling-nginx-1   Up             0.0.0.0:8080->80/tcp
+k5-day14-scaling-redis-1   Up (healthy)   6379/tcp
+```
+
+Nginx (cổng 8080) phân phối request tới 3 agent; agent không mở cổng ra ngoài. Lần đầu tôi chạy test ngay khi container vừa start thì nhận **HTTP 502 Bad Gateway** vì cả 3 agent còn `health: starting` — đợi tới `healthy` mới chạy lại. Đây đúng là lý do cần readiness check: chỉ chuyển request tới instance đã sẵn sàng.
+
+### Exercise 5.5 · Test stateless
+
+```
+$ python3 test_stateless.py
+Session ID: 2a2b9921-92c0-41ff-8af0-6f22892b8232
+Request 1: [instance-613b72]  Q: What is Docker?
+Request 2: [instance-613b72]  Q: Why do we need containers?
+Request 3: [instance-6862b9]  Q: What is Kubernetes?
+Request 4: [instance-613b72]  Q: How does load balancing work?
+Request 5: [instance-306a28]  Q: What is Redis used for?
+Total requests: 5
+Instances used: {'instance-6862b9', 'instance-613b72', 'instance-306a28'}
+✅ All requests served despite different instances!
+--- Conversation History ---
+Total messages: 10
+✅ Session history preserved across all instances via Redis!
+```
+
+Giải thích: 5 câu của **cùng một session** được 3 instance khác nhau trả lời, nhưng lịch sử vẫn đủ 10 tin nhắn (5 user + 5 assistant) theo đúng thứ tự → state nằm trong Redis, không trong RAM của instance nào. Script không tự tắt instance; nếu tắt một agent, Nginx chuyển sang 2 agent còn lại và lịch sử vẫn còn vì Redis không bị ảnh hưởng.
 
 
 
@@ -216,3 +291,4 @@ Hạn chế: bộ đếm nằm trong RAM của một process, chạy nhiều ins
 - Part 1: hỏi Claude cách chạy bản develop/production và cách trình bày bảng so sánh. Tôi tự chạy lệnh, đối chiếu từng anti-pattern với dòng code trong `develop/app.py` và `production/app.py`.
 - Part 2: nhờ Claude giải thích Dockerfile develop và multi-stage, viết nháp câu trả lời 2.1 và 2.3. Tôi đọc lại từng dòng Dockerfile để đối chiếu; số đo image là số tôi tự chạy `docker images`.
 - Part 4: Claude giải thích lỗi 500 (gửi query thay vì JSON body), cách lấy JWT mà không in token, và đọc `rate_limiter.py` / `cost_guard.py` để viết phần trả lời. Mọi output 401/200/403/429 là tôi tự chạy.
+- Part 5: Claude hướng dẫn lệnh test SIGTERM và giải thích lỗi 502 (agent chưa healthy). Output là tôi tự chạy.
