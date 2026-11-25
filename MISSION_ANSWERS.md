@@ -128,4 +128,91 @@ $ curl -X POST http://localhost/ask -H "Content-Type: application/json" -d '{"qu
 {"answer":"Tôi là AI agent được deploy lên cloud. Câu hỏi của bạn đã được nhận."}
 ```
 
+## Part 4 — API Security
 
+### Exercise 4.1 · API key (`04-api-gateway/develop/app.py`)
+
+- **Kiểm tra key ở đâu:** hàm `verify_api_key` đọc header `X-API-Key` (qua `APIKeyHeader`), được gắn vào `/ask` bằng `Depends(verify_api_key)`. `/` và `/health` để công khai.
+- **Sai key thì sao:** thiếu key → **401** `Missing API key`; có key nhưng sai → **403** `Invalid API key`. Endpoint không chạy tiếp.
+- **Rotate key:** key đọc từ biến môi trường `AGENT_API_KEY`, nên đổi giá trị biến trên server rồi khởi động lại, không cần sửa code. Muốn đổi không gián đoạn thì cho phép cùng lúc key cũ và key mới trong một thời gian ngắn.
+
+Chạy với `AGENT_API_KEY=secret-key-123 python app.py`:
+
+```
+$ curl -i -X POST http://localhost:8000/ask -H "Content-Type: application/json" -d '{"question":"Hello"}'
+HTTP/1.1 401 Unauthorized
+{"detail":"Missing API key. Include header: X-API-Key: <your-key>"}
+
+$ curl -i -X POST http://localhost:8000/ask -H "Content-Type: application/json" -H "X-API-Key: secret-key-123" -d '{"question":"Hello"}'
+HTTP/1.1 200 OK
+{"question":"Hello","answer":"Đây là câu trả lời từ AI agent (mock). Trong production, đây sẽ là response từ OpenAI/Anthropic."}
+
+$ curl -i -X POST http://localhost:8000/ask -H "Content-Type: application/json" -H "X-API-Key: sai-key" -d '{"question":"Hello"}'
+HTTP/1.1 403 Forbidden
+{"detail":"Invalid API key."}
+```
+
+Ghi chú: lần đầu tôi gửi câu hỏi qua query (`?question=Hello`) kèm key đúng thì nhận **500 Internal Server Error**, vì `/ask` đọc JSON body (`await request.json()`) mà body rỗng. App nên bắt lỗi này và trả 422 thay vì 500 — tôi áp dụng điều này ở Part 6.
+
+### Exercise 4.2 · JWT (`04-api-gateway/production/`)
+
+Luồng: `POST /auth/token` với `{"username":"student","password":"demo123"}` → server kiểm tra mật khẩu, trả `access_token` (JWT ký bằng secret, chứa `username`, `role`, hết hạn sau 60 phút). Client gửi lại token ở header `Authorization: Bearer <token>`; server chỉ cần kiểm tra chữ ký và hạn, không phải tra mật khẩu mỗi lần.
+
+```
+$ TOKEN=$(curl -s -X POST http://localhost:8000/auth/token -H "Content-Type: application/json" -d '{"username":"student","password":"demo123"}' | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+$ echo "Token dài ${#TOKEN} ký tự"
+Token dài 168 ký tự          # token không in ra để tránh lộ
+```
+
+### Exercise 4.3 · Rate limiting (`rate_limiter.py`)
+
+- **Thuật toán:** sliding window — mỗi user giữ một hàng đợi các mốc thời gian request; mỗi lần gọi bỏ các mốc cũ hơn 60 giây rồi đếm số còn lại.
+- **Giới hạn:** user thường 10 request / 60 giây; admin 100 request / 60 giây.
+- **Bypass cho admin:** không bỏ hẳn giới hạn mà chọn limiter theo `role` trong JWT (`rate_limiter_admin if role == "admin" else rate_limiter_user`), admin có mức cao hơn 10 lần.
+
+```
+$ for i in $(seq 1 12); do curl -s -i -X POST http://localhost:8000/ask -H "Authorization: Bearer $TOKEN" ... | head -1; done
+Lần 1–10:  HTTP/1.1 200 OK
+Lần 11:    HTTP/1.1 429 Too Many Requests
+Lần 12:    HTTP/1.1 429 Too Many Requests
+
+$ curl -s -i -X POST http://localhost:8000/ask -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{"question": "Test 13"}'
+HTTP/1.1 429 Too Many Requests
+x-ratelimit-limit: 10
+x-ratelimit-remaining: 0
+retry-after: 52
+{"detail":{"error":"Rate limit exceeded","limit":10,"window_seconds":60,"retry_after_seconds":52}}
+```
+
+Hạn chế: bộ đếm nằm trong RAM của một process, chạy nhiều instance thì mỗi instance đếm riêng → phải chuyển sang Redis (làm ở Part 6).
+
+### Exercise 4.4 · Cost guard (`cost_guard.py`)
+
+- Mỗi request ghi số token vào và ra của user, đổi ra tiền theo giá GPT-4o-mini ($0,15/1M input, $0,60/1M output).
+- **Trước** khi gọi LLM, `check_budget` kiểm tra: tổng chi trong ngày của user ≥ $1 → **402 Payment Required**; tổng toàn hệ thống ≥ $10/ngày → **503**. Dùng tới 80% thì ghi log cảnh báo.
+- Bản ghi gắn với ngày (`%Y-%m-%d`), sang ngày mới thì tự tính lại từ 0.
+- Cách làm với Redis (yêu cầu của bài, $10/tháng): key `budget:<user_id>:<YYYY-MM>`; đọc số đã chi, nếu `hiện tại + chi phí ước tính > 10` thì từ chối; nếu không thì `INCRBYFLOAT` cộng thêm và đặt hạn hết hạn khoảng 32 ngày — sang tháng mới tên key đổi nên tự reset, và mọi instance dùng chung một bộ đếm.
+- **Vì sao cần cả hai:** rate limit chặn gọi **quá nhanh** (spam, DoS); cost guard chặn **tiêu quá tiền** — một user gọi chậm nhưng câu hỏi dài vẫn có thể đốt hết ngân sách mà không chạm rate limit.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+## AI log
+
+- Part 1: hỏi Claude cách chạy bản develop/production và cách trình bày bảng so sánh. Tôi tự chạy lệnh, đối chiếu từng anti-pattern với dòng code trong `develop/app.py` và `production/app.py`.
+- Part 2: nhờ Claude giải thích Dockerfile develop và multi-stage, viết nháp câu trả lời 2.1 và 2.3. Tôi đọc lại từng dòng Dockerfile để đối chiếu; số đo image là số tôi tự chạy `docker images`.
+- Part 4: Claude giải thích lỗi 500 (gửi query thay vì JSON body), cách lấy JWT mà không in token, và đọc `rate_limiter.py` / `cost_guard.py` để viết phần trả lời. Mọi output 401/200/403/429 là tôi tự chạy.
