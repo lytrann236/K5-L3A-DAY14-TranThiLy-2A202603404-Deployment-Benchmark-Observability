@@ -343,3 +343,4 @@ Tóm tắt thiết kế:
 - Part 4: Claude giải thích lỗi 500 (gửi query thay vì JSON body), cách lấy JWT mà không in token, và đọc `rate_limiter.py` / `cost_guard.py` để viết phần trả lời. Mọi output 401/200/403/429 là tôi tự chạy.
 - Part 5: Claude hướng dẫn lệnh test SIGTERM và giải thích lỗi 502 (agent chưa healthy). Output là tôi tự chạy.
 - Part 6: Claude viết code cho 12 TODO trong `06-lab-complete/` (app/*.py, Dockerfile, compose, .dockerignore, .env.example, railway.toml, render.yaml). Tôi đọc từng file, chạy `check_production_ready.py` trên máy mình để kiểm tra và đọc lại phần giải thích từng file để tự trình bày được.
+- Part 7 (CP7): Claude hướng dẫn chạy load test/eval, chỉ ra nguyên nhân security-02 & scaling-03 sai (retrieval không có tài liệu khớp), viết 2 entry KB bổ sung trong develop/utils/mock_llm.py, và soạn mục 1–3 BENCHMARK_REPORT.md từ số liệu mình tự chạy.
