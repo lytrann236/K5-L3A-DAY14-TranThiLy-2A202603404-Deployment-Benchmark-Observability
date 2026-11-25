@@ -325,16 +325,6 @@ Tóm tắt thiết kế:
 - Graceful shutdown: dựa vào uvicorn + `lifespan`; CMD dùng `exec uvicorn` để uvicorn là PID 1.
 
 
-
-
-
-
-
-
-
-
-
-
 ## AI log
 
 - Part 1: hỏi Claude cách chạy bản develop/production và cách trình bày bảng so sánh. Tôi tự chạy lệnh, đối chiếu từng anti-pattern với dòng code trong `develop/app.py` và `production/app.py`.
@@ -344,3 +334,4 @@ Tóm tắt thiết kế:
 - Part 5: Claude hướng dẫn lệnh test SIGTERM và giải thích lỗi 502 (agent chưa healthy). Output là tôi tự chạy.
 - Part 6: Claude viết code cho 12 TODO trong `06-lab-complete/` (app/*.py, Dockerfile, compose, .dockerignore, .env.example, railway.toml, render.yaml). Tôi đọc từng file, chạy `check_production_ready.py` trên máy mình để kiểm tra và đọc lại phần giải thích từng file để tự trình bày được.
 - Part 7 (CP7): Claude hướng dẫn chạy load test/eval, chỉ ra nguyên nhân security-02 & scaling-03 sai (retrieval không có tài liệu khớp), viết 2 entry KB bổ sung trong develop/utils/mock_llm.py, và soạn mục 1–3 BENCHMARK_REPORT.md từ số liệu mình tự chạy.
+- Part 7 (CP8): Claude chẩn đoán lỗi agent crash (ModuleNotFoundError uvicorn) và đề xuất thêm ENV PYTHONUSERBASE vào production/Dockerfile, phát hiện lần đo scale_1 đầu bị sai do `compose run` tự scale agent (chạy lại với --no-deps), hướng dẫn thí nghiệm A–E, và soạn mục 4–6 BENCHMARK_REPORT.md từ số liệu/ảnh mình tự đo.
