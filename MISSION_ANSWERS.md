@@ -273,7 +273,37 @@ Total messages: 10
 Giải thích: 5 câu của **cùng một session** được 3 instance khác nhau trả lời, nhưng lịch sử vẫn đủ 10 tin nhắn (5 user + 5 assistant) theo đúng thứ tự → state nằm trong Redis, không trong RAM của instance nào. Script không tự tắt instance; nếu tắt một agent, Nginx chuyển sang 2 agent còn lại và lịch sử vẫn còn vì Redis không bị ảnh hưởng.
 
 
+## Part 6 — Final Project (`06-lab-complete/`)
 
+`python check_production_ready.py` (bản đầy đủ, có Docker):
+
+```
+  📋 Checklist Deliverable
+     ✅ Dockerfile (multi-stage, < 500 MB)
+     ✅ docker-compose.yml (agent + redis)
+     ✅ .dockerignore
+     ✅ Health check endpoint (GET /health)
+     ✅ Readiness endpoint (GET /ready)
+     ✅ API Key authentication
+     ✅ Rate limiting
+     ✅ Cost guard
+     ✅ Config từ environment variables
+     ✅ Structured logging
+     ✅ Graceful shutdown
+     ✅ Public URL ready (Railway / Render config)
+----------------------------------------------------------------
+  Result: 12/12 tiêu chí đạt · 43/43 checks passed
+  🎉 PASS 12/12 — PRODUCTION READY! Deploy nào!
+```
+
+Một số số đo từ lần chấm: image 262 MB; build 10 s; 429 sau 5 request (`RATE_LIMIT_PER_MINUTE=5`), restart agent vẫn 429 (state trong Redis); 402 ở request đầu với budget 0,000001 USD; `docker stop` exit code 0 trong 0,5 s.
+
+Tóm tắt thiết kế:
+- `/health` không đụng Redis (liveness), `/ready` ping Redis → 503 khi mất kết nối (readiness).
+- Rate limit: sliding window 60 s bằng Redis sorted set theo API key (băm SHA-256, không lưu key thật), có header `Retry-After`.
+- Cost guard: cộng chi phí theo token vào `budget:<ngày UTC>` (`INCRBYFLOAT`), kiểm tra trước khi gọi LLM.
+- Lỗi đầu vào trả 422 JSON, lỗi Redis trả 503, lỗi khác trả 500 JSON — không lộ stack trace.
+- Graceful shutdown: dựa vào uvicorn + `lifespan`; CMD dùng `exec uvicorn` để uvicorn là PID 1.
 
 
 
@@ -292,3 +322,4 @@ Giải thích: 5 câu của **cùng một session** được 3 instance khác nh
 - Part 2: nhờ Claude giải thích Dockerfile develop và multi-stage, viết nháp câu trả lời 2.1 và 2.3. Tôi đọc lại từng dòng Dockerfile để đối chiếu; số đo image là số tôi tự chạy `docker images`.
 - Part 4: Claude giải thích lỗi 500 (gửi query thay vì JSON body), cách lấy JWT mà không in token, và đọc `rate_limiter.py` / `cost_guard.py` để viết phần trả lời. Mọi output 401/200/403/429 là tôi tự chạy.
 - Part 5: Claude hướng dẫn lệnh test SIGTERM và giải thích lỗi 502 (agent chưa healthy). Output là tôi tự chạy.
+- Part 6: Claude viết code cho 12 TODO trong `06-lab-complete/` (app/*.py, Dockerfile, compose, .dockerignore, .env.example, railway.toml, render.yaml). Tôi đọc từng file, chạy `check_production_ready.py` trên máy mình để kiểm tra và đọc lại phần giải thích từng file để tự trình bày được.
