@@ -1,7 +1,9 @@
 # Benchmark & Observability Report — Day 14
 
 **Họ tên:** Trần Thị Lý — 2A202603404
+
 **Ngày chạy:** 2026-11-25
+
 **Môi trường:** MacBook Apple M2, macOS, Python 3.13, Docker Desktop (8 CPU / 7.7 GB RAM). Bước develop chạy local không qua Docker: mỗi agent là 1 process `python app.py`.
 
 ---
