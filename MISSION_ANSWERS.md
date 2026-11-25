@@ -128,6 +128,25 @@ $ curl -X POST http://localhost/ask -H "Content-Type: application/json" -d '{"qu
 {"answer":"Tôi là AI agent được deploy lên cloud. Câu hỏi của bạn đã được nhận."}
 ```
 
+## Part 3 — Cloud Deployment
+
+**Public URL:** https://agent-production-3b4bac03.up.railway.app (Railway, Root Directory `06-lab-complete`, service `agent` + Redis)
+
+Kết quả kiểm tra trên URL public: `/health` 200 · `/ready` 200 · `/ask` không key 401 · `/ask` có key 200. `check_production_ready.py --public-url` → PASS 12/12 (44/44 checks). Chi tiết trong DEPLOYMENT.md.
+
+**So sánh railway.toml và render.yaml**
+- `railway.toml` chỉ cấu hình build/deploy cho **một** service (builder DOCKERFILE, healthcheckPath, restart policy). Redis và biến môi trường phải tạo trên dashboard.
+- `render.yaml` là Blueprint mô tả **cả hạ tầng**: web service (runtime docker, rootDir, healthCheckPath) và Key Value Redis. Nó còn nối biến với nhau (`REDIS_URL` lấy từ `fromService`), và secret dùng `generateValue: true` nên không ghi giá trị vào file.
+- Điểm chung: đều build từ Dockerfile, đều health check `/health`, app đọc `PORT` do platform cấp.
+- Ghi chú thực tế: Railway đã ngừng Config-as-code cho service mới, nên khi deploy mình phải đặt Builder, Healthcheck Path, Root Directory trên dashboard. `railway.toml` vẫn giữ trong repo.
+
+**Cloud Run CI/CD (`03-cloud-deployment/production-cloud-run/`)**
+- `cloudbuild.yaml` là pipeline 4 bước nối tiếp nhau bằng `waitFor`: **test** (cài requirements và chạy `pytest tests/`; test fail thì dừng, không build) → **build** Docker image, gắn 2 tag `:$COMMIT_SHA` và `:latest`, dùng `--cache-from :latest` để tái sử dụng layer → **push** lên Container Registry → **deploy** lên Cloud Run bằng đúng image `:$COMMIT_SHA` (truy vết và rollback theo commit được).
+- Lúc deploy: region `asia-southeast1`, `--min-instances=1` để tránh cold start, `--max-instances=10` để giới hạn scale và chi phí, 512Mi / 1 CPU, timeout 60s. Secret lấy từ **Secret Manager** (`--set-secrets`) chứ không ghi vào file.
+- `service.yaml` là IaC khai báo cùng service đó (Knative): autoscale 1–10 instance, `containerConcurrency: 80`, resource requests/limits, env và secret qua `secretKeyRef`. **livenessProbe** gọi `/health`, còn **startupProbe** gọi `/ready`: Cloud Run chỉ chuyển traffic khi app đã sẵn sàng (Redis kết nối được).
+- So với Railway: Cloud Run có test làm "cổng chặn" trước khi deploy và cấu hình hạ tầng nằm hết trong code; Railway thì build và deploy ngay khi push, không có bước test.
+
+
 ## Part 4 — API Security
 
 ### Exercise 4.1 · API key (`04-api-gateway/develop/app.py`)
@@ -320,6 +339,7 @@ Tóm tắt thiết kế:
 
 - Part 1: hỏi Claude cách chạy bản develop/production và cách trình bày bảng so sánh. Tôi tự chạy lệnh, đối chiếu từng anti-pattern với dòng code trong `develop/app.py` và `production/app.py`.
 - Part 2: nhờ Claude giải thích Dockerfile develop và multi-stage, viết nháp câu trả lời 2.1 và 2.3. Tôi đọc lại từng dòng Dockerfile để đối chiếu; số đo image là số tôi tự chạy `docker images`.
+- Part 3: Claude hướng dẫn các bước deploy trên Railway dashboard, viết lệnh test (chỉ in mã HTTP, không in key) và soạn DEPLOYMENT.md từ kết quả mình tự chạy.
 - Part 4: Claude giải thích lỗi 500 (gửi query thay vì JSON body), cách lấy JWT mà không in token, và đọc `rate_limiter.py` / `cost_guard.py` để viết phần trả lời. Mọi output 401/200/403/429 là tôi tự chạy.
 - Part 5: Claude hướng dẫn lệnh test SIGTERM và giải thích lỗi 502 (agent chưa healthy). Output là tôi tự chạy.
 - Part 6: Claude viết code cho 12 TODO trong `06-lab-complete/` (app/*.py, Dockerfile, compose, .dockerignore, .env.example, railway.toml, render.yaml). Tôi đọc từng file, chạy `check_production_ready.py` trên máy mình để kiểm tra và đọc lại phần giải thích từng file để tự trình bày được.
